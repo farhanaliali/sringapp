@@ -1,0 +1,65 @@
+# This workflow uses actions that are not certified by GitHub.
+# They are provided by a third-party and are governed by
+# separate terms of service, privacy policy, and support
+# documentation.
+
+# GitHub recommends pinning actions to a commit SHA.
+# To get a newer version, you will need to update the SHA.
+# You can also reference a tag or branch, but the action may change without warning.
+
+name: Build and Deploy to GKE
+
+on:
+  workflow_dispatch: # Allows manual triggering of the workflow
+
+
+#env:
+#  PROJECT_ID: ${{ secrets.GKE_PROJECT }}
+#  GKE_CLUSTER: demo-autopilot-cluster   # Add your cluster name here.
+#  GKE_REGION: us-east1
+#  IMAGE: docker-basic
+#  GAR_LOCATION: us-east1-docker.pkg.dev/${{ secrets.GKE_PROJECT }}/demo/docker-basic
+
+jobs:
+  setup-build-publish-deploy:
+    name: Setup, Build, Publish, and Deploy
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - id: "auth"
+      uses: "google-github-actions/auth@v1"
+      with:
+          credentials_json: "${{ secrets.GKE_SA_KEY }}"
+    - name: "Set up Cloud SDK"
+      uses: "google-github-actions/setup-gcloud@v1"
+
+    - name: "Use gcloud CLI"
+      run: "gcloud info"
+    - name: "Docker auth"
+      run: |-
+          gcloud auth configure-docker ${{ secrets.GKE_REGION }}-docker.pkg.dev --quiet
+    - name: Build image
+      run: docker build --tag ${{ secrets.GAR_LOCATION }}:${{ github.sha }} .
+
+    - name: Push image
+      run: docker push ${{ secrets.GAR_LOCATION }}:${{ github.sha }}
+    - name: Set up GKE credentials
+      uses: google-github-actions/get-gke-credentials@v2
+      with:
+        cluster_name: ${{ secrets.GKE_CLUSTER }}
+        location: ${{ secrets.GKE_REGION }}
+
+  
+    - name: Update Deployment Manifest
+      run: |
+        sed -i 's|PLACEHOLDER_IMAGE|'"${{ secrets.GAR_LOCATION }}:${{ github.sha }}"'|g' gcp-k8s/deployment.yaml
+        cat gcp-k8s/deployment.yaml # Debugging: View the updated file
+
+    # Step 7: Apply Kubernetes Manifests
+    - name: Apply Kubernetes Manifests
+      run: |
+        kubectl apply -f gcp-k8s
